@@ -1,0 +1,92 @@
+import socket
+import json
+import time
+
+class Socket:
+	def __init__(self):
+		self.host = "10.0.2.15"
+		self.port = 5865
+		self.socket_connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.socket_connection.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+		while self.socket_connection.connect_ex((self.host, self.port)) != 0:
+			time.sleep(5)
+
+		self.start_connection()
+
+	def reliable_send(self, data):
+		json_data = json.dumps(data)
+		self.connection.send(json_data.encode())
+		return self.reliable_receive()
+
+	def reliable_receive(self):
+		json_data = ""
+		while True:
+			try:
+				json_data += self.socket_connection.recv(1024).decode()
+				return json.loads(json_data)
+			except ValueError:
+				continue
+
+	def command_options(self):
+		print("1. Signup")
+		print("2. Login")
+		print("3. BruteForce")
+		print("4. Help\n")
+
+	def bruteforce(self, command):
+		username_file = command[1]
+		password_file = command[2]
+		attempts = command[3]
+		repeat = 0
+
+		try:
+			with open(username_file, "r") as f:
+				usernames = f.readlines()
+				f.close()
+
+				with open(password_file, "r") as f:
+					passwords = f.readlines()
+					f.close()
+		except FileNotFoundError:
+			return "[-] File doesnt exist"
+
+		try:
+			for values in usernames:
+				values = values.strip()
+				args = ["3", "-u", values, "-p", passwords[repeat]]
+				args = [x.strip() for x in args]
+				yield args
+				repeat += 1
+		except IndexError:
+			return "[+] End of script"
+
+	def start_connection(self):
+		self.command_options()
+		while True:
+			command = input(">> ")
+			command = command.split(" ")
+
+			if "3" in command:
+				attempts = int(command[3])
+				get_info = self.bruteforce(command)
+
+				try:
+					for _ in range(attempts):
+						gen_object = next(get_info)
+						sent_data = self.reliable_send(gen_object)
+						print(sent_data)
+				except StopIteration:
+					print("\n[+] End of script.")
+					continue
+				except IndexError:
+					print("\n[-] Invalid index.")
+					continue
+
+			else:
+				sent_data = self.reliable_send(command)
+				print(sent_data)
+
+
+if __name__ == '__main__':
+	Socket()
