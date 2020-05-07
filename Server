@@ -1,0 +1,160 @@
+import socket
+import argparse
+import json
+import sqlite3
+import ipaddress
+import subprocess
+import time
+
+class Colors:
+
+	@staticmethod
+	def red_color(color):
+		return "\033[2;31;10m" + color 
+
+	@staticmethod
+	def purple_color(color):
+		return "\033[1;30;10m" + color
+
+	@staticmethod
+	def bright_blue(color):
+		return "\033[1;34;10m" + color 
+
+	@staticmethod
+	def green_color(color):
+		return "\033[1;32;10m" + color
+
+	@staticmethod
+	def white_color(color):
+		return "\033[1;37;10m" + color
+
+
+class Parser:
+	def __init__(self):
+		self.args = argparse.ArgumentParser(description="Mini server")
+		self.args.add_argument("-ip", help="Ip you want the client to connect to", type=self.validate_ip, required=True)
+		self.args.add_argument("--port", help="Port you want to open", type=self.validate_port, required=True)
+
+		self.args_parsed = self.args.parse_args()
+
+	def get_ip(self):
+		return self.args_parsed.ip
+
+	def get_port(self):
+		return self.args_parsed.port
+
+	def error(self, error):
+		return Colors.red_color(f"\n[-] {error}")
+
+	def validate_port(self, port):
+		port = int(port)
+		if port > 65536 or port < 1024:
+			print(self.error(f"Invalid port --> {str(port)}"))
+			exit()
+		return port
+
+	def validate_ip(self, ip):
+		if not ipaddress.ip_address(ip):
+			print(self.error(f"Invalid IP --> {str(ip)}"))
+			exit()
+		return ip
+
+
+class SqlServer(Parser):
+	def __init__(self):
+		super().__init__()
+		self.conn = sqlite3.connect("Userdata.db")
+		self.c = self.conn.cursor()
+
+	def create_table(self):
+		self.c.execute(""" CREATE TABLE IF NOT EXISTS user_data (
+				username text,
+				password text
+			)""")
+
+	def user_signup(self, username, password):
+		self.c.execute("""SELECT username, password FROM user_data WHERE username=?""", (username,))
+		if not self.c.fetchone():
+			self.c.execute("INSERT INTO user_data VALUES (?, ?)", (username, password))
+			self.conn.commit()
+			return f"[+] Sucessfully Created account: {username}"
+		else:
+			return f"[-] Username {username} Already taken."
+
+	def user_login(self, username, password):
+		self.c.execute("""SELECT username, password FROM user_data WHERE username=? AND password=?""", (username, password))
+		if self.c.fetchone():
+			return f"[+] Logged in as {username}"
+		return f"[-] Invalid username: {username}"
+
+class Socket(SqlServer):
+	def __init__(self):
+		super().__init__()
+		self.ip = self.get_ip()
+		self.port = self.get_port()
+
+		self.socket_connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.socket_connection.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+		self.socket_connection.bind((self.ip, self.port))
+		print(Colors.bright_blue("\n[+] Waiting for a connection"))
+
+		self.socket_connection.listen(0)
+		self.connection, self.address = self.socket_connection.accept()
+
+		self.start_connection()
+
+	def reliable_send(self, data):
+		json_data = json.dumps(data.decode())
+		self.connection.send(json_data.encode())
+
+	def reliable_receive(self):
+		json_data = ""
+		while True:
+			try:
+				json_data += self.connection.recv(1024).decode()
+				return json.loads(json_data)
+			except ValueError:
+				continue
+
+	def help_options(self):
+		signup_help =  "Signup example: -u (your_username) -p (your_password)"
+		login_help = "Login Example: -u (your_username) -p (your_password)"
+		bruteforce_help = "Bruteforce Example: 3 (username_file) (password_file) (attempts): (e.g: 3 File1 File2 10)"
+		return signup_help + "\n" + login_help + "\n" + bruteforce_help
+
+	def command_options(self):
+		return {
+			"1": {"-u": self.user_signup},
+			"2": {"-u": self.user_login},
+			"3": {"-u": self.user_login},  # try to bruteforce into the SQL
+			"4": self.help_options
+		}
+
+	def start_connection(self):
+		get_command = self.command_options()
+
+		print(Colors.green_color(f"\n[+] Got connection from --> {str(self.address[0])}"))
+
+		while True:
+			try:
+				data = self.reliable_receive()
+
+				try:
+					sent_data = get_command[data[0]][data[1]](data[2], data[4])
+					sent_data = sent_data.encode()
+				except IndexError:
+					sent_data = get_command[data[0]]()  # help options
+					sent_data = sent_data.encode()
+
+			except Exception as e:
+				print(e)
+				sent_data = b'[-] Invalid command'
+			self.reliable_send(sent_data)
+
+if __name__ == '__main__':
+	try:
+		SqlServer().create_table()
+		Socket()
+	except KeyboardInterrupt:
+		print("\n[-] Exiting")
+		exit()
